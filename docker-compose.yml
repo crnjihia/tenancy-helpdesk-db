@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: tenancy_helpdesk_db
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: tenancy_helpdesk
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts:/scripts:ro
+      - ./tests:/tests:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tenancy_helpdesk"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  flyway:
+    image: flyway/flyway:9-alpine
+    container_name: tenancy_helpdesk_flyway
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FLYWAY_URL: jdbc:postgresql://db:5432/tenancy_helpdesk
+      FLYWAY_USER: postgres
+      FLYWAY_PASSWORD: password
+    volumes:
+      - ./sql:/flyway/sql
+      - ./flyway.conf:/flyway/conf/flyway.conf
+    command: -configFiles=/flyway/conf/flyway.conf migrate
+
+volumes:
+  pgdata:
