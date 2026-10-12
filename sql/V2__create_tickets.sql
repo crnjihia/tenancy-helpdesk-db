@@ -23,3 +23,6 @@ CREATE TABLE tickets_pro PARTITION OF tickets
 -- Partition for enterprise tier tenants
 CREATE TABLE tickets_enterprise PARTITION OF tickets
     FOR VALUES IN ('enterprise');
+
+-- Partial index for fast retrieval of open tickets per tenant, ordered by creation time descending
+CREATE INDEX idx_tickets_open ON tickets (tenant_id, created_at DESC) WHERE status = 'open';
