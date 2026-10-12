@@ -1,0 +1,15 @@
+# Flyway commandline archives and temp directories
+flyway-*/
+flyway.tar.gz
+*.tar.gz
+
+# Temporary / scratch SQL files
+combined_migrations.sql
+*.tmp
+*.log
+
+# OS / Editor artifacts
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
