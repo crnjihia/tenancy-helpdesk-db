@@ -1,12 +1,30 @@
 # Tenancy Helpdesk DB
 
+**Multi-Tenant · PostgreSQL · Row-Level Security**
+
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B-316192?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Flyway](https://img.shields.io/badge/Flyway-9.22-CC0202?logo=flyway&logoColor=white)](https://flywaydb.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **Portfolio Project 1 of 6**  
-> A standalone, production-grade PostgreSQL multi-tenant database engineered for Kenyan SMEs and SACCOs (Savings and Credit Cooperative Societies). Enforces strict tenant isolation entirely within the database kernel using **Row-Level Security (RLS)**, **physical list partitioning**, **partial indexing**, and **JSONB configuration**.
+A production-grade multi-tenant helpdesk database for Kenyan SMEs and SACCOs — shared-schema design where each organisation's tickets, agents, and SLA configs coexist in one PostgreSQL instance, fully isolated via Row-Level Security policies. Ships with a migration history, seeded demo tenants, and a documented shared-vs-schema-per-tenant trade-off analysis in the README.
+
+### Key Features
+- **RLS policies on every table**: `tenant_id` column enforced at DB level, not app level
+- **Partial indexes on `(tenant_id, status)`**: keeps per-tenant queries fast at scale
+- **Table partitioning by tenant tier** (`free` / `pro` / `enterprise`): isolates hot/cold data tiers physically
+- **Flyway versioned migrations**: sequential migrations with tenant-aware seed scripts
+- **JSONB per-tenant config column**: feature flags, SLA thresholds, and branding stored flexibly
+
+```sql
+-- RLS policy example
+CREATE POLICY tenant_isolation ON tickets
+    FOR ALL
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+```
+
+**STACK**: `PostgreSQL` · `RLS` · `Flyway` · `JSONB` · `Partitioning` · `GIN index`
 
 ---
 
@@ -254,16 +272,6 @@ tenancy-helpdesk-db/
 ├── LICENSE                            # MIT License
 └── README.md                          # Production engineering documentation
 ```
-
----
-
-## Author & Portfolio Context
-
-**Christopher Njihia**  
-Database Engineer | Systems & Backend Architecture  
-GitHub: [@crnjihia](https://github.com/crnjihia)
-
-This project is part of a 6-part PostgreSQL advanced database engineering portfolio demonstrating deep expertise in multi-tenancy, time-series, hierarchical data, inventory correctness, geospatial indexing, and query optimization.
 
 ---
 
