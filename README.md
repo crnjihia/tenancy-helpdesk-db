@@ -1,44 +1,62 @@
-# tenancy-helpdesk-db
+# Tenancy Helpdesk DB
 
-A production-grade, shared-schema multi-tenant helpdesk database built for Kenyan SMEs and SACCOs (Savings and Credit Cooperative Societies) using **PostgreSQL Row-Level Security (RLS)**, **list partitioning**, **partial indexing**, and **JSONB configuration**.
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B-316192?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Flyway](https://img.shields.io/badge/Flyway-9.22-CC0202?logo=flyway&logoColor=white)](https://flywaydb.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Enforces strict tenant isolation entirely at the database engine level with zero reliance on application-layer `WHERE tenant_id = ?` filtering.
+> **Portfolio Project 1 of 6**  
+> A standalone, production-grade PostgreSQL multi-tenant database engineered for Kenyan SMEs and SACCOs (Savings and Credit Cooperative Societies). Enforces strict tenant isolation entirely within the database kernel using **Row-Level Security (RLS)**, **physical list partitioning**, **partial indexing**, and **JSONB configuration**.
 
 ---
 
-## Technical Highlights
+## Executive Overview
 
-- **Database-Enforced Tenant Isolation**: Enforced via PostgreSQL Row-Level Security (RLS) on all tenant-scoped tables (`tenants`, `tickets`, `agents`).
-- **Owner RLS Enforcement (`FORCE ROW LEVEL SECURITY`)**: Even table owners and application connections are strictly subject to RLS policies.
-- **Tenant Context via GUC**: Application sets tenant context per transaction using `SET LOCAL app.tenant_id = '<uuid>'`. Database policies evaluate `current_setting('app.tenant_id')::uuid`.
-- **List Partitioning by Tenant Tier**: `tickets` table is partitioned by `tier` (`free`, `pro`, `enterprise`), isolating physical storage and I/O between high-throughput enterprise SACCOs and free-tier SMEs.
-- **Partial Indexing for Hot Paths**: `idx_tickets_open` on `(tenant_id, created_at DESC) WHERE status = 'open'` guarantees sub-millisecond query latency for open ticket queues while keeping closed tickets out of the B-tree index.
-- **JSONB Tenant Configuration**: Stores feature flags, SLA thresholds, and branding in a single `config` JSONB column with GIN containment indexing and a `STORED` generated column for fast SLA filtering.
-- **Automated Flyway Migrations**: Clean, sequential versioned migrations (`V1` to `V4`) and repeatable seed data (`R__seed_demo_tenants.sql`).
-- **Zero-Config Spinup**: Fully runnable from a clean checkout with a single `docker compose up`.
+In the Kenyan fintech and cooperative landscape, hundreds of SACCOs and SMEs require strict data isolation without the unsustainable cost of dedicated database instances. **Tenancy Helpdesk DB** implements a **shared-schema, multi-tenant** architecture where isolation is guaranteed by PostgreSQL's Row-Level Security engine, eliminating the vulnerability of forgotten application-level `WHERE tenant_id = ?` clauses.
 
-## Architecture Diagram
+### Core Engineering Capabilities Demonstrated
+
+1. **Kernel-Enforced Tenant Isolation**: Database-level RLS policies enforced with `FORCE ROW LEVEL SECURITY`, preventing even table owners or compromised connection pools from leaking tenant data.
+2. **Transaction Context via GUC**: Application context is injected dynamically per transaction using `SET LOCAL app.tenant_id = '<uuid>'` and evaluated via `current_setting('app.tenant_id')::uuid`.
+3. **Physical Storage Tiering (List Partitioning)**: The `tickets` table is partitioned into physical storage segments (`tickets_free`, `tickets_pro`, `tickets_enterprise`) to isolate high-frequency enterprise SACCO traffic from free-tier SMEs.
+4. **Hot-Path Partial Indexing**: `idx_tickets_open` indexes only unresolved tickets (`WHERE status = 'open'`), maintaining minimal B-tree memory footprint and delivering sub-0.1ms query response times.
+5. **Flexible Tenant Configuration (JSONB + GIN + Generated Columns)**: Feature flags, SLAs, and branding are stored in a JSONB column accelerated by GIN indexing, paired with a deterministic `STORED` generated column for index-assisted SLA filtering.
+6. **Automated Flyway Migrations**: Clean, sequential versioned migrations (`V1`–`V4`) and repeatable seed data (`R__seed_demo_tenants.sql`).
+
+---
+
+## Entity-Relationship Schema Architecture
+
+The entity-relationship diagram below illustrates table normalization, foreign key constraints, generated columns, and physical partitioning:
+
+![DBeaver Schema ER Diagram](assets/dbeaver-schema-erd.png)
+
+*Figure 1: DBeaver Entity-Relationship diagram showing `tenants`, partitioned `tickets`, `agents`, and automated Flyway schema tracking.*
+
+---
+
+## Architectural Data Flow
 
 ```mermaid
 flowchart TD
-    subgraph Client ["Application / API Layer"]
-        Tx1["Tenant 1 (Acme Free)\nSET LOCAL app.tenant_id = '1111...'"]
-        Tx2["Tenant 2 (Harambee SACCO)\nSET LOCAL app.tenant_id = '2222...'"]
+    subgraph AppLayer ["Application / Connection Pool Layer"]
+        Tx1["Transaction 1: Acme Retailers (Free Tier)\nSET LOCAL app.tenant_id = '11111111-1111-1111-1111-111111111111'"]
+        Tx2["Transaction 2: Harambee SACCO (Pro Tier)\nSET LOCAL app.tenant_id = '22222222-2222-2222-2222-222222222222'"]
     end
 
-    subgraph PostgresEngine ["PostgreSQL Engine (RLS & GUC)"]
-        GUC["current_setting('app.tenant_id')::uuid"]
-        RLS["FORCE ROW LEVEL SECURITY\nUSING (tenant_id = GUC)\nWITH CHECK (tenant_id = GUC)"]
+    subgraph PostgresEngine ["PostgreSQL Engine (Kernel-Level Enforcement)"]
+        GUC["Session GUC Context: current_setting('app.tenant_id')::uuid"]
+        RLS["FORCE ROW LEVEL SECURITY Policy\nUSING (tenant_id = GUC)\nWITH CHECK (tenant_id = GUC)"]
     end
 
-    subgraph Storage ["List Partitioning & Partial Indexes"]
-        Tickets["tickets (PARTITION BY LIST tier)"]
+    subgraph PhysicalStorage ["Partitioned Storage & Hot Indexes"]
+        Tickets["tickets (LIST PARTITIONED BY tier)"]
         PFree["tickets_free\nidx_tickets_open (status = 'open')"]
         PPro["tickets_pro\nidx_tickets_open (status = 'open')"]
         PEnt["tickets_enterprise\nidx_tickets_open (status = 'open')"]
     end
 
-    subgraph TenantsConfig ["tenants Table"]
+    subgraph TenantMetadata ["Tenants Metadata Table"]
         Tenants["tenants\n- config (JSONB)\n- idx_tenants_config_gin (GIN)\n- sla_ms (STORED Generated)"]
     end
 
@@ -54,199 +72,201 @@ flowchart TD
 
 ---
 
-## File Structure
-
-```text
-tenancy-helpdesk-db/
-├── docker-compose.yml
-├── flyway.conf
-├── sql/
-│   ├── V1__create_tenants.sql
-│   ├── V2__create_tickets.sql
-│   ├── V3__create_agents.sql
-│   ├── V4__enable_rls.sql
-│   └── R__seed_demo_tenants.sql
-├── scripts/
-│   ├── demo_isolation.sql
-│   └── benchmark_rls.sql
-└── README.md
-```
-
----
-
 ## Multi-Tenancy Architecture Trade-Off Analysis
 
-| Architectural Dimension | Shared-Schema + RLS (This Repo) | Schema-per-Tenant | Database-per-Tenant |
+| Architectural Dimension | Shared-Schema + RLS (This Project) | Schema-per-Tenant | Database-per-Tenant |
 | :--- | :--- | :--- | :--- |
-| **Isolation Level** | **Logical**: Enforced by Postgres kernel RLS policies + GUC context. | **Schema-level**: Separate namespaces inside one cluster. | **Physical**: Complete process and storage isolation. |
-| **Infrastructure Cost** | **Lowest**: Single DB cluster, shared memory buffers, CPU, and connection pool. | **Moderate**: High dictionary cache overhead with hundreds of schemas. | **Highest**: Dedicated compute, memory, and baseline storage per tenant. |
-| **Schema Migration Complexity** | **Trivial**: Single migration run applies instantly to all tenants via Flyway. | **High**: Migrations must loop over every schema; partial migration failures risk inconsistency. | **Very High**: Fleet orchestration tooling required; maintenance windows compound. |
-| **Connection Pooling** | **Optimal**: Generic connection pool (PgBouncer) serves all tenants via `SET LOCAL`. | **Challenging**: Requires `search_path` manipulation per checkout or tenant-specific pools. | **Poor**: Dedicated connection pool required per tenant database. |
+| **Isolation Mechanism** | **Logical**: Kernel RLS policies + GUC transaction context. | **Namespace**: Separate PostgreSQL schemas per tenant. | **Physical**: Dedicated PostgreSQL instances or databases. |
+| **Infrastructure Cost** | **Lowest**: Single connection pool, shared memory buffers, CPU, and disk. | **Moderate**: High system catalog memory overhead past 500 schemas. | **Highest**: Dedicated compute, memory, and baseline storage per tenant. |
+| **Schema Migration Operations** | **Trivial**: Single migration pass via Flyway updates all tenants simultaneously. | **Complex**: Migrations must loop over every schema; partial failures require recovery. | **High Overhead**: Fleet orchestration required; maintenance windows compound. |
+| **Connection Pooling Efficiency** | **Optimal**: Generic PgBouncer pool serves all tenants via `SET LOCAL`. | **Challenging**: Requires `search_path` manipulation per checkout or tenant-specific pools. | **Poor**: Dedicated connection pool required per tenant database. |
 | **Backup & Restore Granularity** | Row-level filtering required for single-tenant point-in-time recovery. | Single-schema dump and restore supported natively by `pg_dump -n`. | Native database-level backup and point-in-time restore per tenant. |
 | **Noisy Neighbor Mitigation** | Controlled via physical tier list-partitioning (`free`, `pro`, `enterprise`). | Partial: Shares CPU and disk I/O, but separate table files. | Maximum: Full hardware, memory, and IOPS isolation. |
-| **Target Workload Fit** | **Kenyan SMEs & SACCOs**: High tenant count, cost-sensitive, standardized schema. | B2B SaaS with custom tenant extensions. | Regulated Tier-1 banking, healthcare, or government tenants. |
+| **Ideal Use-Case** | **Kenyan SMEs & SACCOs**: High tenant count, cost-sensitive, standardized schema. | B2B SaaS with custom tenant schema extensions. | Regulated Tier-1 banking, healthcare, or government tenants. |
 
 ---
 
-## Quick Start
+## Security Architecture: Eliminating the RLS Footgun
 
-### 1. Launch Environment with a Single Command
+### The Critical Vulnerability: `USING` without `WITH CHECK`
 
-From a clean checkout, run:
+When configuring Row-Level Security policies in PostgreSQL, omitting the `WITH CHECK` clause creates a critical security hole:
 
-```bash
-docker compose up -d
+```sql
+-- ❌ DANGEROUS: Allows cross-tenant data insertion
+CREATE POLICY tenant_isolation ON tickets
+    FOR ALL
+    USING (tenant_id = current_setting('app.tenant_id')::uuid);
 ```
 
-This starts PostgreSQL 15 and automatically triggers the Flyway migration container once the database is healthy. All schema tables, partial indexes, RLS policies, and demo tenants are created and seeded automatically.
+**Why this fails:**
+- `USING` only filters **existing rows** already in the table (`SELECT`, `DELETE`, and the target rows of `UPDATE`).
+- If `WITH CHECK` is omitted from a `FOR ALL` policy, PostgreSQL applies **no constraint validation to incoming new rows** during `INSERT` or the proposed values of `UPDATE`.
+- Any tenant could execute `INSERT INTO tickets (tenant_id, ...) VALUES ('victim-tenant-id', ...);` and bypass isolation entirely!
 
-### 2. Verify Tenant Isolation
+### The Production Defense: Dual-Clause + `FORCE ROW LEVEL SECURITY`
 
-Run the interactive isolation demo script:
+```sql
+-- ✅ SECURE: Strict read and write enforcement
+CREATE POLICY ticket_isolation ON tickets
+    FOR ALL
+    USING (tenant_id = current_setting('app.tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
 
-```bash
-docker compose exec db psql -U postgres -d tenancy_helpdesk -f /scripts/demo_isolation.sql
-# or locally if psql is installed:
-psql -h localhost -U postgres -d tenancy_helpdesk -f scripts/demo_isolation.sql
+-- Ensure table owners and connection pools are also constrained
+ALTER TABLE tickets FORCE ROW LEVEL SECURITY;
 ```
 
-The script performs the following validation steps:
-1. Switches to non-superuser role `app_user`.
-2. Sets `SET LOCAL app.tenant_id = '11111111-1111-1111-1111-111111111111'` (Acme Retailers Kenya - Free tier) and inserts a ticket.
-3. Switches transaction context to Tenant 2 (`22222222-2222-2222-2222-222222222222` - Harambee SACCO) and attempts to read Tenant 1's ticket: returns **0 rows**.
-4. Attempts a malicious cross-tenant insert where Tenant 2 tries to insert a row with Tenant 1's ID: PostgreSQL blocks the query with an **RLS `WITH CHECK` violation (`SQLSTATE 42501`)**.
+Additionally, `FORCE ROW LEVEL SECURITY` prevents table owners from bypassing RLS rules when executing queries under pooled connection roles.
 
 ---
 
-## Indexing & Performance Benchmark
+## Performance & Query Optimization Benchmark
 
-Hot helpdesk query paths filter open tickets per tenant sorted by creation date. The partial index defined in `V2__create_tickets.sql`:
+In helpdesk applications, **90%+ of queries target open tickets** sorted by creation date, while resolved tickets sit inactive.
+
+### Partial Indexing Strategy
 
 ```sql
 CREATE INDEX idx_tickets_open ON tickets (tenant_id, created_at DESC) WHERE status = 'open';
 ```
 
-Because `tickets` is list-partitioned by `tier`, PostgreSQL automatically builds partition-local partial indexes (`tickets_free_tenant_id_created_at_idx`, `tickets_pro_...`, `tickets_enterprise_...`). Closed tickets (typically 90%+ of historical records) are entirely excluded from the index pages, keeping index footprints minimal and memory-resident.
+Because `tickets` is list-partitioned by `tier`, PostgreSQL automatically creates partition-local partial indexes (`tickets_free_tenant_id_created_at_idx`, `tickets_pro_...`, `tickets_enterprise_...`). Closed tickets are excluded from the B-tree index, keeping index pages hot in memory.
 
-### Reproducible Benchmark
+### Reproducible `EXPLAIN (ANALYZE, BUFFERS)` Output
 
-Execute the reproducible benchmark script:
+Executing `scripts/benchmark_rls.sql` against 1,000 synthetic tickets (500 open, 500 closed):
+
+```text
+Limit  (cost=0.57..24.66 rows=3 width=108) (actual time=0.039..0.044 rows=10.00 loops=1)
+   Buffers: shared hit=7
+   ->  Merge Append  (cost=0.57..24.66 rows=3 width=108) (actual time=0.038..0.043 rows=10.00 loops=1)
+         Sort Key: tickets.created_at DESC
+         Buffers: shared hit=7
+         ->  Index Scan using tickets_free_tenant_id_created_at_idx on tickets_free tickets_1  (cost=0.28..8.30 rows=1 width=108) (actual time=0.018..0.020 rows=10.00 loops=1)
+               Index Cond: (tenant_id = (current_setting('app.tenant_id'::text))::uuid)
+               Index Searches: 1
+               Buffers: shared hit=3
+         ->  Index Scan using tickets_pro_tenant_id_created_at_idx on tickets_pro tickets_2  (cost=0.13..8.15 rows=1 width=108) (actual time=0.012..0.012 rows=0.00 loops=1)
+               Index Cond: (tenant_id = (current_setting('app.tenant_id'::text))::uuid)
+               Index Searches: 1
+               Buffers: shared hit=2
+         ->  Index Scan using tickets_enterprise_tenant_id_created_at_idx on tickets_enterprise tickets_3  (cost=0.13..8.15 rows=1 width=108) (actual time=0.006..0.006 rows=0.00 loops=1)
+               Index Cond: (tenant_id = (current_setting('app.tenant_id'::text))::uuid)
+               Index Searches: 1
+               Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=235
+ Planning Time: 4.681 ms
+ Execution Time: 0.087 ms
+```
+
+**Key Performance Highlights:**
+- **Execution Time**: **0.087 ms** (sub-millisecond latency).
+- **Buffer Cache Hit**: 100% shared memory buffer hit (`shared hit=7`), zero disk I/O.
+- **Index Scan**: Scans only the partition partial index, completely bypassing 500 closed tickets.
+
+---
+
+## Seeded Kenyan SME & SACCO Tenants
+
+| Tenant Name | Tenant UUID | Tier | SLA Threshold | Features & Branding Config |
+| :--- | :--- | :--- | :--- | :--- |
+| **Acme Retailers Kenya** | `11111111-1111-1111-1111-111111111111` | `free` | 2.0 hrs (7,200,000 ms) | Basic ticketing, Color `#004080` |
+| **Harambee Sacco Society** | `22222222-2222-2222-2222-222222222222` | `pro` | 1.0 hr (3,600,000 ms) | Live Chat, Custom Domain, Color `#008040` |
+| **Afya Apex Health Network** | `33333333-3333-3333-3333-333333333333` | `enterprise` | 0.5 hr (1,800,000 ms) | Priority SLA, Live Chat, Color `#800020` |
+
+---
+
+## Quick Start & Verification
+
+### 1. Launch with Docker Compose
+
+```bash
+docker compose up -d
+```
+
+PostgreSQL 15 starts and Flyway automatically executes migrations `V1` through `V4` and seeds the demo tenants.
+
+*Port Mapping*: Host port **`5433`** maps to container port `5432` to avoid conflicts with any local PostgreSQL services.
+
+### 2. Connect via DBeaver / Database GUI
+
+- **Host**: `localhost`
+- **Port**: `5433`
+- **Database**: `tenancy_helpdesk`
+- **Username**: `postgres`
+- **Password**: `password`
+
+### 3. Run the Tenant Isolation Demo
+
+```bash
+docker compose exec db psql -U postgres -d tenancy_helpdesk -f /scripts/demo_isolation.sql
+```
+
+**Verified Behavior**:
+- Switches to non-superuser role `app_user`.
+- Tenant 1 opens a ticket.
+- Tenant 2 switches context and queries tickets → returns **0 rows**.
+- Tenant 2 attempts a malicious cross-tenant insert with Tenant 1's ID → blocked with `NOTICE: SUCCESS: RLS blocked unauthorized insert (insufficient_privilege)`.
+
+### 4. Run the Performance Benchmark
 
 ```bash
 docker compose exec db psql -U postgres -d tenancy_helpdesk -f /scripts/benchmark_rls.sql
 ```
 
-### EXPLAIN (ANALYZE, BUFFERS) Execution Plan
+Outputs the `EXPLAIN (ANALYZE, BUFFERS)` execution plan with sub-0.1ms latency and automatic rollback.
+
+### 5. Run Automated Test Suites
+
+```bash
+docker compose exec db psql -U postgres -d tenancy_helpdesk -f /tests/tenant_isolation.sql
+docker compose exec db psql -U postgres -d tenancy_helpdesk -f /tests/jsonb_config.sql
+```
+
+---
+
+## Repository Layout
 
 ```text
-Limit  (cost=0.28..12.45 rows=10 width=128) (actual time=0.024..0.042 rows=10 loops=1)
-  Buffers: shared hit=8
-  ->  Append  (cost=0.28..36.79 rows=30 width=128) (actual time=0.023..0.039 rows=10 loops=1)
-        Buffers: shared hit=8
-        ->  Index Scan using tickets_free_tenant_id_created_at_idx on tickets_free tickets_1  (cost=0.28..12.18 rows=10 width=128) (actual time=0.022..0.035 rows=10 loops=1)
-              Index Cond: (tenant_id = '11111111-1111-1111-1111-111111111111'::uuid)
-              Filter: (status = 'open'::text)
-              Buffers: shared hit=8
-        ->  Index Scan using tickets_pro_tenant_id_created_at_idx on tickets_pro tickets_2  (cost=0.15..12.15 rows=10 width=128) (never executed)
-        ->  Index Scan using tickets_enterprise_tenant_id_created_at_idx on tickets_enterprise tickets_3  (cost=0.15..12.15 rows=10 width=128) (never executed)
-Planning Time: 0.284 ms
-Execution Time: 0.068 ms
+tenancy-helpdesk-db/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                     # Automated CI: Flyway, TAP tests, benchmark
+├── assets/
+│   └── dbeaver-schema-erd.png         # DBeaver Entity-Relationship diagram
+├── scripts/
+│   ├── demo_isolation.sql             # Live demonstration of RLS isolation
+│   └── benchmark_rls.sql              # EXPLAIN ANALYZE partial index benchmark
+├── sql/
+│   ├── V1__create_tenants.sql         # Enum, tenants table, JSONB config, GIN index, SLA column
+│   ├── V2__create_tickets.sql         # Tickets table, tier list-partitioning, partial index
+│   ├── V3__create_agents.sql          # Agents table with tenant foreign keys
+│   ├── V4__enable_rls.sql             # FORCE RLS policies, app_user role creation
+│   └── R__seed_demo_tenants.sql       # Seed data for Kenyan SMEs & SACCOs
+├── tests/
+│   ├── tenant_isolation.sql           # TAP test suite verifying RLS isolation
+│   └── jsonb_config.sql               # TAP test suite verifying GIN index containment
+├── .gitignore                         # Clean git ignore for OS & Flyway artifacts
+├── docker-compose.yml                 # PostgreSQL 15 + automated Flyway migration service
+├── flyway.conf                        # Flyway database connection configuration
+├── LICENSE                            # MIT License
+└── README.md                          # Production engineering documentation
 ```
-
-When the query includes the tenant's tier (`AND tier = 'free'`), static partition pruning eliminates the Pro and Enterprise partitions during planning time:
-
-```text
-Limit  (cost=0.28..12.18 rows=10 width=128) (actual time=0.021..0.036 rows=10 loops=1)
-  Buffers: shared hit=5
-  ->  Index Scan using tickets_free_tenant_id_created_at_idx on tickets_free  (cost=0.28..12.18 rows=10 width=128) (actual time=0.020..0.033 rows=10 loops=1)
-        Index Cond: (tenant_id = '11111111-1111-1111-1111-111111111111'::uuid)
-        Filter: (status = 'open'::text)
-        Buffers: shared hit=5
-Planning Time: 0.120 ms
-Execution Time: 0.052 ms
-```
-
-**Key Takeaways:**
-- **Sub-0.1ms Latency**: Total query execution time is under 70 microseconds.
-- **Zero Disk Reads**: 100% buffer cache hit (`shared hit=8` / `shared hit=5`).
-- **Pruned Scan**: Closed tickets are bypassed entirely at index traversal time.
 
 ---
 
-## Critical Security Footgun: `USING` vs `WITH CHECK`
+## Author & Portfolio Context
 
-> ### WARNING: Omission of `WITH CHECK` on `FOR ALL` Policies
->
-> In PostgreSQL Row-Level Security, the `USING` clause and `WITH CHECK` clause govern fundamentally different operations:
->
-> 1. **`USING`**: Evaluated against **existing rows** already in the table. Governs `SELECT`, `DELETE`, and the target qualification of `UPDATE`.
-> 2. **`WITH CHECK`**: Evaluated against **new row candidates**. Governs `INSERT` and the proposed post-update row values of `UPDATE`.
->
-> If a policy is declared as:
->
-> ```sql
-> -- ❌ DANGEROUS: Permissive write vulnerability
-> CREATE POLICY tenant_isolation ON tickets
->     FOR ALL
->     USING (tenant_id = current_setting('app.tenant_id')::uuid);
-> ```
->
-> **The Vulnerability**:
-> - Any authenticated connection can issue `INSERT INTO tickets (tenant_id, ...) VALUES ('victim-tenant-id', ...);`. Because there is no `WITH CHECK` clause, PostgreSQL allows the insert without verifying the incoming `tenant_id`!
-> - Similarly, an `UPDATE` statement could re-assign existing tickets to another tenant.
->
-> **The Production Solution**:
->
-> ```sql
-> -- ✅ SECURE: Strict read and write enforcement
-> CREATE POLICY ticket_isolation ON tickets
->     FOR ALL
->     USING (tenant_id = current_setting('app.tenant_id')::uuid)
->     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
->
-> -- Prevent table owners from bypassing RLS
-> ALTER TABLE tickets FORCE ROW LEVEL SECURITY;
-> ```
+**Christopher Njihia**  
+Database Engineer | Systems & Backend Architecture  
+GitHub: [@crnjihia](https://github.com/crnjihia)
 
----
-
-## JSONB Configuration & Generated Columns
-
-Tenant settings, SLA configurations, and UI branding are stored in `tenants.config`:
-
-```json
-{
-  "sla_ms": 3600000,
-  "feature_flags": {
-    "chat": true,
-    "priority_support": false
-  },
-  "branding": {
-    "company_name": "Harambee SACCO",
-    "primary_color": "#008040",
-    "logo_url": "https://cdn.harambeesacco.co.ke/logo.png"
-  }
-}
-```
-
-- **GIN Containment Queries**: Accelerated by `idx_tenants_config_gin ON tenants USING GIN (config)`. Supports fast JSON containment queries like `config @> '{"feature_flags": {"chat": true}}'`.
-- **Generated SLA Column**: A deterministic `STORED` generated column extracts SLA thresholds without JSON runtime parsing:
-  ```sql
-  sla_ms INTEGER GENERATED ALWAYS AS ((config->>'sla_ms')::INTEGER) STORED
-  ```
-
----
-
-## Seeded Demo Tenants
-
-| Tenant Name | Tenant ID | Tier | SLA | Enabled Feature Flags |
-| :--- | :--- | :--- | :--- | :--- |
-| **Acme Retailers Kenya** | `11111111-1111-1111-1111-111111111111` | `free` | 2.0 hrs (7,200,000 ms) | Basic ticketing |
-| **Harambee Sacco Society** | `22222222-2222-2222-2222-222222222222` | `pro` | 1.0 hr (3,600,000 ms) | Live Chat, Custom Domain |
-| **Afya Apex Health Network** | `33333333-3333-3333-3333-333333333333` | `enterprise` | 0.5 hr (1,800,000 ms) | Live Chat, Priority Support, Custom Domain |
+This project is part of a 6-part PostgreSQL advanced database engineering portfolio demonstrating deep expertise in multi-tenancy, time-series, hierarchical data, inventory correctness, geospatial indexing, and query optimization.
 
 ---
 
 ## License
 
-MIT
+This project is open-source and available under the [MIT License](LICENSE).
