@@ -57,17 +57,12 @@ jobs:
         run: |
           psql -c "\i scripts/benchmark_rls.sql"
 
-      - name: Install pgTAP
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-15-pgtap
-
-      - name: Run pgTAP tests
+      - name: Run test suites
         env:
           PGHOST: localhost
           PGUSER: postgres
           PGPASSWORD: password
           PGDATABASE: tenancy_helpdesk
         run: |
-          psql -c "CREATE EXTENSION IF NOT EXISTS pgtap;"
-          pg_prove -d ${PGDATABASE} -U ${PGUSER} tests/**/*.sql
+          psql -v ON_ERROR_STOP=1 -c "\i tests/tenant_isolation.sql"
+          psql -v ON_ERROR_STOP=1 -c "\i tests/jsonb_config.sql"
